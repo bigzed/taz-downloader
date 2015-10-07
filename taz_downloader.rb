@@ -3,6 +3,8 @@ require 'httparty'
 require 'fileutils'
 require 'date'
 require 'optparse'
+require 'mail'
+require 'yaml'
 
 class TazDownloader
   include HTTParty
@@ -35,6 +37,26 @@ class TazDownloader
     end
   end
 
+  def send_mail(options)
+    file_content = File.read(File.join(@destination, "#{options[:date].strftime('%y.%m.%d')}.pdf"))
+    options[:receivers].each do |r|
+      mail = Mail.new do 
+        from 'taz-delivery@obstkiste.org'
+        to r
+        subject "TAZ from #{options[:date].strftime('%d.%m.%y')}"
+        body <<-EOF
+Enjoy your taz!
+
+best,
+taz-delivery@obstkiste.org
+        EOF
+        add_file filename: "taz_#{options[:date].strftime('%y.%m.%d')}.pdf", content: file_content
+      end
+      puts "Delivering mail to #{r}"
+      mail.deliver!
+    end
+  end
+
 private
 
   def parse_id(date)
@@ -59,6 +81,9 @@ OptionParser.new do |opts|
     options[:target] = v
   end
 
+  opts.on('-m', '--mail x@y.com,z@y.com', Array, 'Send mail to adresses') do |v|
+    options[:mails] = v
+  end
   opts.on('-h', '--help', 'Prints helpt') do
     puts opts
     exit
@@ -70,7 +95,25 @@ abort 'Please supply username' if options[:username].nil?
 abort 'Please supply password' if options[:password].nil?
 abort 'Please supply target folder' if options[:target].nil?
 
-# Download pdf
+# Prepare TAZ downloader
 taz = TazDownloader.new(destination: options[:target], password: options[:password], name: options[:username])
 date = Time.now
+
+# Downloading
+puts "Downloading TAZ for #{date.strftime('%d.%m.%y')}..."
 taz.download_pdf(date)
+
+# Send mail if necessary
+if options[:mails]
+  path = File.expand_path('../mail.yml', __FILE__)
+  abort "Mail config is missing in #{path}" unless File.exists?(path)
+  
+  config = YAML.load_file(path)
+
+  # Set the delivery method 
+  Mail.defaults do
+    delivery_method :smtp, config
+  end
+
+  taz.send_mail({date: date, receivers: options[:mails]}) 
+end
